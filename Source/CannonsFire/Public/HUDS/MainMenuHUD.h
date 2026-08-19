@@ -22,7 +22,7 @@ public:
 	virtual void DrawHUD() override;
 
 	/*void ShowMainMenuWidget();*/
-
+	UPROPERTY(EditAnywhere)
 	TSubclassOf<class UMainMenuWidget> MainMenuWidgetClass;
 
 	UMainMenuWidget* MainMenuWidgetContainer;

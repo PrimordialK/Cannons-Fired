@@ -1,8 +1,8 @@
 // Fill out your copyright notice in the Description page of Project Settings.
 
+#include "GUI/MainMenuWidget.h"
 #include "Kismet/KismetSystemLibrary.h"
 #include "Kismet/GameplayStatics.h"
-#include "GUI/MainMenuWidget.h"
 
 void UMainMenuWidget::NativeConstruct()
 {

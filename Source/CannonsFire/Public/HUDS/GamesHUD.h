@@ -26,6 +26,7 @@ public:
 	UPROPERTY(EditAnywhere)
 	UTexture2D* CrosshairTexture;
 	
+	UPROPERTY(EditAnywhere)
 	TSubclassOf<class UGameWidget> GameWidgetClass;
 	UGameWidget* GameWidgetContainer;
 

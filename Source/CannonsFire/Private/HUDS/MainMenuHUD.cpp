@@ -51,6 +51,6 @@ void AMainMenuHUD::SpawnMainMenuWidget()
 
 
 
-	PlayerOwner->bShowMouseCursor = false;
+	PlayerOwner->bShowMouseCursor = true;
 	PlayerOwner->SetInputMode(FInputModeGameOnly());
 }

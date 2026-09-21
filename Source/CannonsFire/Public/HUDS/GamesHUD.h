@@ -8,27 +8,31 @@
 #include "GUI/GameWidget.h"
 #include "GamesHUD.generated.h"
 
-
-/**
- * 
- */
 UCLASS()
 class CANNONSFIRE_API AGamesHUD : public AHUD
 {
 	GENERATED_BODY()
 
 public:
-
 	virtual void BeginPlay() override;
-
 	virtual void DrawHUD() override;
-	
+
 	UPROPERTY(EditAnywhere)
 	UTexture2D* CrosshairTexture;
-	
+
 	UPROPERTY(EditAnywhere)
 	TSubclassOf<class UGameWidget> GameWidgetClass;
 	UGameWidget* GameWidgetContainer;
+
+	// Score handling
+	UFUNCTION()
+	void AddScore(int32 Delta);
+
+		UFUNCTION()
+void OnTimerEnded();
+
+private:
+	int32 Score = 0;
 
 	void SpawnGameWidget();
 };

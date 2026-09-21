@@ -3,11 +3,13 @@
 
 
 #include "HUDS/GamesHUD.h"
+#include "GUI/WinWidget.h"
 
 
 void AGamesHUD::BeginPlay()
 {
 	Super::BeginPlay();
+	Score = 0;
 	SpawnGameWidget();
 }
 
@@ -54,6 +56,7 @@ void AGamesHUD::DrawHUD()
 void AGamesHUD::SpawnGameWidget()
 {
 	if (!GameWidgetClass) return;
+
 	// Delete game menu widget if it already exists
 
 	if (GameWidgetContainer) {
@@ -63,9 +66,47 @@ void AGamesHUD::SpawnGameWidget()
 	}
 
 	GameWidgetContainer = CreateWidget<UGameWidget>(GetWorld(), GameWidgetClass);
-	GameWidgetContainer->AddToViewport();
+	if (GameWidgetContainer)
+	{
+		GameWidgetContainer->AddToViewport();
+		GameWidgetContainer->UpdateScore(Score);
+		
+		
+	}
 
-	PlayerOwner->bShowMouseCursor = false;
-	PlayerOwner->SetInputMode(FInputModeGameOnly());
+	if (PlayerOwner)
+	{
+		PlayerOwner->bShowMouseCursor = false;
+		PlayerOwner->SetInputMode(FInputModeGameOnly());
+	}
+}
+
+void AGamesHUD::AddScore(int32 Delta)
+{
+	Score += Delta;
+	if (GameWidgetContainer)
+	{
+		GameWidgetContainer->UpdateScore(Score);
+	}
+}
+
+void AGamesHUD::OnTimerEnded()
+{
+	// Handle timer end (minimal implementation to satisfy the delegate bind).
+	// Customize: show end-screen widget, stop game input, etc.
+
+	// Remove the game widget if present
+	if (GameWidgetContainer)
+	{
+		GameWidgetContainer->RemoveFromParent();
+		GameWidgetContainer = nullptr;
+	}
+
+	// Optionally show mouse cursor / switch input to UI
+	if (PlayerOwner)
+	{
+		PlayerOwner->bShowMouseCursor = true;
+		PlayerOwner->SetInputMode(FInputModeUIOnly());
+	}
 }
 

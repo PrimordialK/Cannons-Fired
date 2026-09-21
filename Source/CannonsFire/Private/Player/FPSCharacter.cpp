@@ -10,6 +10,7 @@
 #include "DrawDebugHelpers.h" // debug visualization
 #include "Components/PrimitiveComponent.h" // for UPrimitiveComponent
 #include "Cannons/Cannon.h" // Include Cannon header
+#include "InputCoreTypes.h" // for EKeys
 
 // Sets default values
 AFPSCharacter::AFPSCharacter()
@@ -48,6 +49,7 @@ AFPSCharacter::AFPSCharacter()
 
 	HeldProjectile = nullptr;
 	HeldComponent = nullptr;
+	HeldCannon = nullptr;
 }
 
 // Called when the game starts or when spawned
@@ -83,7 +85,7 @@ void AFPSCharacter::Tick(float DeltaTime)
 {
 	Super::Tick(DeltaTime);
 
-	// Update held object position every frame
+	// Update held object position every frame (projectiles use PhysicsHandle; cannons are attached to camera)
 	if (PhysicsHandle && PhysicsHandle->GrabbedComponent)
 	{
 		FVector HoldLocation = FPSCameraComponent->GetComponentLocation()
@@ -91,7 +93,7 @@ void AFPSCharacter::Tick(float DeltaTime)
 		PhysicsHandle->SetTargetLocation(HoldLocation);
 
 		// Keep angular velocity zero and align rotation to camera so it doesn't spin
-		if (HeldComponent)
+		if (HeldComponent && !HeldCannon) // only apply to grabbed components (projectiles)
 		{
 			// zero angular velocity (degrees)
 			HeldComponent->SetPhysicsAngularVelocityInDegrees(FVector::ZeroVector);
@@ -136,6 +138,9 @@ void AFPSCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputCompon
 		EnhancedInputComponent->BindAction(InteractAction, ETriggerEvent::Started, this, &AFPSCharacter::Interact);
 
 	}
+
+	// Direct key binding: Q fires the cannon under crosshair or the held cannon
+	PlayerInputComponent->BindKey(EKeys::Q, IE_Pressed, this, &AFPSCharacter::FireCannonUnderCrosshair);
 
 }
 void AFPSCharacter::Move(const FInputActionValue& Value)
@@ -192,10 +197,63 @@ void AFPSCharacter::Fire()
 
 }
 
+void AFPSCharacter::MoveCannonUnderCrosshair()
+{
+	// Trace to cannon and move it to a point in front of the player
+	FVector TraceStart = FPSCameraComponent->GetComponentLocation();
+	FVector TraceEnd = TraceStart + FPSCameraComponent->GetForwardVector() * GrabDistance;
+
+	FHitResult HitResult;
+	FCollisionQueryParams QueryParams;
+	QueryParams.AddIgnoredActor(this);
+
+	if (GetWorld()->LineTraceSingleByChannel(HitResult, TraceStart, TraceEnd, ECC_Visibility, QueryParams))
+	{
+		if (ACannon* HitCannon = Cast<ACannon>(HitResult.GetActor()))
+		{
+			// Compute destination in front of player
+			FVector Dest = FPSCameraComponent->GetComponentLocation() + FPSCameraComponent->GetForwardVector() * HoldDistance;
+			FRotator DestRot = FPSCameraComponent->GetComponentRotation();
+			// Move cannon (teleport)
+			HitCannon->SetActorLocation(Dest, false, nullptr, ETeleportType::TeleportPhysics);
+			HitCannon->SetActorRotation(DestRot, ETeleportType::TeleportPhysics);
+			UE_LOG(LogTemp, Log, TEXT("MoveCannonUnderCrosshair: Moved cannon %s to %s"), *GetNameSafe(HitCannon), *Dest.ToString());
+		}
+	}
+}
+
+void AFPSCharacter::FireCannonUnderCrosshair()
+{
+	// If we're holding a cannon, fire it directly
+	if (HeldCannon)
+	{
+		HeldCannon->Shoot();
+		UE_LOG(LogTemp, Log, TEXT("FireCannonUnderCrosshair: Called Shoot() on held cannon %s"), *GetNameSafe(HeldCannon));
+		return;
+	}
+
+	// Otherwise trace to cannon and call Shoot()
+	FVector TraceStart = FPSCameraComponent->GetComponentLocation();
+	FVector TraceEnd = TraceStart + FPSCameraComponent->GetForwardVector() * GrabDistance;
+
+	FHitResult HitResult;
+	FCollisionQueryParams QueryParams;
+	QueryParams.AddIgnoredActor(this);
+
+	if (GetWorld()->LineTraceSingleByChannel(HitResult, TraceStart, TraceEnd, ECC_Visibility, QueryParams))
+	{
+		if (ACannon* HitCannon = Cast<ACannon>(HitResult.GetActor()))
+		{
+			HitCannon->Shoot();
+			UE_LOG(LogTemp, Log, TEXT("FireCannonUnderCrosshair: Called Shoot() on %s"), *GetNameSafe(HitCannon));
+		}
+	}
+}
+
 void AFPSCharacter::Interact()
 {
 	// If already holding something, drop it
-	if (HeldProjectile)
+	if (HeldProjectile || HeldCannon)
 	{
 		// First release the physics handle so it stops constraining the component
 		if (PhysicsHandle && PhysicsHandle->GrabbedComponent)
@@ -211,24 +269,27 @@ void AFPSCharacter::Interact()
 			HeldComponent = nullptr;
 		}
 
-		// Optional: also re-enable on the main projectile mesh as a fallback
+		// If we were holding a projectile, restore it
 		if (HeldProjectile && HeldProjectile->ProjectileMesh)
 		{
 			HeldProjectile->ProjectileMesh->SetSimulatePhysics(true);
 			HeldProjectile->ProjectileMesh->SetEnableGravity(true);
-		}
-
-		// Detach if previously attached (safe if not attached)
-		if (HeldProjectile)
-		{
 			HeldProjectile->DetachFromActor(FDetachmentTransformRules::KeepWorldTransform);
+			HeldProjectile = nullptr;
 		}
 
-		HeldProjectile = nullptr;
+		// If we were holding a cannon, restore it
+		if (HeldCannon)
+		{
+			// Detach cannon actor and clear held reference
+			HeldCannon->DetachFromActor(FDetachmentTransformRules::KeepWorldTransform);
+			HeldCannon = nullptr;
+		}
+
 		return;
 	}
 
-	// Line trace from camera to find a projectile (use GrabDistance here)
+	// Line trace from camera to find a projectile or cannon (use GrabDistance here)
 	FVector TraceStart = FPSCameraComponent->GetComponentLocation();
 	FVector TraceEnd = TraceStart + FPSCameraComponent->GetForwardVector() * GrabDistance;
 
@@ -240,21 +301,38 @@ void AFPSCharacter::Interact()
 	FCollisionQueryParams QueryParams;
 	QueryParams.AddIgnoredActor(this);
 
-	FCollisionObjectQueryParams ObjQuery;
-	ObjQuery.AddObjectTypesToQuery(ECC_WorldStatic);
-	ObjQuery.AddObjectTypesToQuery(ECC_WorldDynamic);
-	ObjQuery.AddObjectTypesToQuery(ECC_PhysicsBody); // include physics bodies
-
 	if (GetWorld()->LineTraceSingleByChannel(HitResult, TraceStart, TraceEnd, ECC_Visibility, QueryParams))
 	{
 		UE_LOG(LogTemp, Log, TEXT("Interact: Hit actor %s (component=%s)"), *GetNameSafe(HitResult.GetActor()), *GetNameSafe(HitResult.GetComponent()));
 
-		// If we hit a cannon, shoot it
+		// If we hit a cannon, pick it up (same as projectile pickup)
 		if (ACannon* HitCannon = Cast<ACannon>(HitResult.GetActor()))
 		{
-			UE_LOG(LogTemp, Log, TEXT("Interact: Hit cannon %s - calling Shoot()"), *GetNameSafe(HitCannon));
-			HitCannon->Shoot();
-			return;
+			UPrimitiveComponent* HitComp = HitResult.GetComponent();
+			if (HitComp)
+			{
+				// Ensure physics enabled and disable gravity while held
+				HitComp->SetSimulatePhysics(true);
+				HitComp->SetEnableGravity(false);
+
+				// store actor and component
+				HeldCannon = HitCannon;
+				HeldComponent = HitComp;
+
+				if (PhysicsHandle)
+				{
+					FVector GrabLocation = HitResult.ImpactPoint.IsNearlyZero() ? HitComp->GetComponentLocation() : HitResult.ImpactPoint;
+					const FRotator GrabRot = FPSCameraComponent->GetComponentRotation();
+					PhysicsHandle->GrabComponentAtLocationWithRotation(HitComp, NAME_None, GrabLocation, GrabRot);
+
+					FVector HoldLocation = FPSCameraComponent->GetComponentLocation() + FPSCameraComponent->GetForwardVector() * HoldDistance;
+					PhysicsHandle->SetTargetLocation(HoldLocation);
+
+					HitComp->SetWorldRotation(GrabRot, false, nullptr, ETeleportType::TeleportPhysics);
+					UE_LOG(LogTemp, Warning, TEXT("Grabbed cannon %s (comp=%s) — moving to HoldDistance=%f"), *GetNameSafe(HitCannon), *GetNameSafe(HitComp), HoldDistance);
+				}
+				return;
+			}
 		}
 
 		// ... existing projectile pickup handling continues ...

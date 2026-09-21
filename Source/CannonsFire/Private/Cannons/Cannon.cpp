@@ -4,7 +4,9 @@
 #include "Cannons/Projectile.h"
 #include "Components/SceneComponent.h"
 #include "Components/ArrowComponent.h"
+#include "Components/StaticMeshComponent.h"
 #include "GameFramework/ProjectileMovementComponent.h"
+#include "Kismet/GameplayStatics.h"
 #include "Engine/World.h"
 #include "Engine/Engine.h"
 #include "DrawDebugHelpers.h"
@@ -39,6 +41,41 @@ void ACannon::OnConstruction(const FTransform& Transform)
 	{
 		MuzzlePoint->SetMobility(EComponentMobility::Movable);
 	}
+
+	// Robust search for the cannon head mesh component and attach the muzzle to it.
+	// Matches common names: "CannonHead", "CannonHeadMesh", "Cannon_Head", "StaticMesh1" (fallback).
+	UStaticMeshComponent* FoundHead = nullptr;
+	TArray<UStaticMeshComponent*> MeshComps;
+	GetComponents<UStaticMeshComponent>(MeshComps);
+
+	for (UStaticMeshComponent* Comp : MeshComps)
+	{
+		if (!Comp) continue;
+
+		const FString CompName = Comp->GetName();
+
+		// Check for common candidate names or a "CannonHead" substring
+		if (CompName.Equals(TEXT("CannonHead"), ESearchCase::IgnoreCase) ||
+			CompName.Equals(TEXT("CannonHeadMesh"), ESearchCase::IgnoreCase) ||
+			CompName.Equals(TEXT("Cannon_Head"), ESearchCase::IgnoreCase) ||
+			CompName.Equals(TEXT("StaticMesh1"), ESearchCase::IgnoreCase) ||
+			CompName.Contains(TEXT("CannonHead")) ||
+			CompName.Contains(TEXT("Cannon_Head")) )
+		{
+			FoundHead = Comp;
+			break;
+		}
+	}
+
+	if (FoundHead && MuzzlePoint)
+	{
+		MuzzlePoint->AttachToComponent(FoundHead, FAttachmentTransformRules::KeepRelativeTransform);
+		UE_LOG(LogTemp, Log, TEXT("ACannon::OnConstruction - Attached MuzzlePoint to cannon head component %s"), *GetNameSafe(FoundHead));
+	}
+	else
+	{
+		UE_LOG(LogTemp, Warning, TEXT("ACannon::OnConstruction - Cannon head mesh not found. MuzzlePoint remains attached to SceneRoot. (Check component name in BP)"));
+	}
 }
 
 void ACannon::BeginPlay()
@@ -68,10 +105,8 @@ void ACannon::Shoot()
 	UWorld* World = GetWorld();
 	if (!World) return;
 
-	// Spawn a bit further in front of the muzzle to avoid initial overlap
 	const FVector Forward = MuzzlePoint->GetForwardVector();
-	const float SpawnForwardOffset = 40.0f; // increased from 20.0f
-	const FVector SpawnLoc = MuzzlePoint->GetComponentLocation() + Forward * SpawnForwardOffset;
+	const FVector SpawnLoc = MuzzlePoint->GetComponentLocation() + Forward * 20.0f; // tweak offset as needed
 	const FRotator SpawnRot = MuzzlePoint->GetComponentRotation();
 
 	FActorSpawnParameters SpawnParams;
@@ -79,9 +114,18 @@ void ACannon::Shoot()
 	SpawnParams.Instigator = GetInstigator();
 	SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
 
+	// Debug: visualize spawn
 	DrawDebugLine(World, MuzzlePoint->GetComponentLocation(), SpawnLoc + Forward * 50.0f, FColor::Red, false, 2.0f, 0, 2.0f);
 	UE_LOG(LogTemp, Log, TEXT("ACannon::Shoot - Spawning projectile at %s rot %s"), *SpawnLoc.ToString(), *SpawnRot.ToString());
 
+	// Play one-shot fire sound at the muzzle location
+	if (FireSound)
+	{
+		const FVector SoundLocation = MuzzlePoint->GetComponentLocation();
+		UGameplayStatics::PlaySoundAtLocation(this, FireSound, SoundLocation);
+	}
+
+	// Spawn
 	AProjectile* NewProj = World->SpawnActor<AProjectile>(ProjectileClass, SpawnLoc, SpawnRot, SpawnParams);
 	if (!NewProj)
 	{
@@ -89,131 +133,42 @@ void ACannon::Shoot()
 		return;
 	}
 
-	// Make the projectile ignore the cannon actor while it leaves the muzzle to avoid immediate collisions
-	// This calls the primitive helper that tells the movement system to ignore collisions with the cannon actor
-	TArray<UPrimitiveComponent*> PrimCompsIgnore;
-	NewProj->GetComponents<UPrimitiveComponent>(PrimCompsIgnore);
-	for (UPrimitiveComponent* Prim : PrimCompsIgnore)
-	{
-		if (!Prim) continue;
-		Prim->IgnoreActorWhenMoving(this, true);
-	}
-
-	// Additionally, ignore the cannon's individual primitive components to be safe (per-component ignore)
-	TArray<UPrimitiveComponent*> CannonPrims;
-	GetComponents<UPrimitiveComponent>(CannonPrims); // cannon's components
-	if (CannonPrims.Num() > 0)
-	{
-		for (UPrimitiveComponent* Prim : PrimCompsIgnore)
-		{
-			if (!Prim) continue;
-			for (UPrimitiveComponent* CPrim : CannonPrims)
-			{
-				if (!CPrim) continue;
-				// Ignore specific cannon component when moving to avoid any component-vs-component collision checks
-				Prim->IgnoreComponentWhenMoving(CPrim, true);
-			}
-		}
-	}
-
-	// Ensure actor-level collision enabled
+	// Ensure actor-level collision is enabled
 	NewProj->SetActorEnableCollision(true);
 
-	// Collect primitive components and force collision/simulation, then reinitialize physics state
+	// Force-enable collision on all primitive components
 	TArray<UPrimitiveComponent*> PrimComps;
 	NewProj->GetComponents<UPrimitiveComponent>(PrimComps);
-
 	for (UPrimitiveComponent* Prim : PrimComps)
 	{
 		if (!Prim) continue;
-
 		Prim->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
 		Prim->SetCollisionObjectType(ECC_PhysicsBody);
 		Prim->SetCollisionResponseToAllChannels(ECR_Block);
 		Prim->SetCollisionResponseToChannel(ECC_Pawn, ECR_Ignore);
 		Prim->SetNotifyRigidBodyCollision(true);
-
-		// Recreate physics state so runtime changes take effect, then wake the body
 		Prim->RecreatePhysicsState();
-		if (Prim->IsSimulatingPhysics())
-		{
-			Prim->WakeRigidBody();
-		}
-
-		UE_LOG(LogTemp, Log, TEXT("ACannon::Shoot - Enabled collision on component %s (Enabled=%d, ObjType=%d)"),
-			*GetNameSafe(Prim),
-			(int)Prim->GetCollisionEnabled(),
-			(int)Prim->GetCollisionObjectType());
+		if (Prim->IsSimulatingPhysics()) Prim->WakeRigidBody();
+		UE_LOG(LogTemp, Log, TEXT("ACannon::Shoot - Enabled collision on component %s"), *GetNameSafe(Prim));
 	}
 
-	// If projectile requests physics movement force fallback
-	UProjectileMovementComponent* ProjMove = NewProj->FindComponentByClass<UProjectileMovementComponent>();
-	if (NewProj->bForcePhysicsMovement)
+	// Launch logic (prefer ProjectileMovementComponent, fallback to physics)... 
+	if (UProjectileMovementComponent* ProjMove = NewProj->FindComponentByClass<UProjectileMovementComponent>())
 	{
-		UE_LOG(LogTemp, Log, TEXT("ACannon::Shoot - Projectile requests physics movement, using physics fallback"));
-		ProjMove = nullptr;
-	}
-
-	UPrimitiveComponent* MovementUpdatedComp = nullptr;
-	if (NewProj->ProjectileMesh)
-	{
-		MovementUpdatedComp = NewProj->ProjectileMesh;
-	}
-	if (!MovementUpdatedComp && PrimComps.Num() > 0)
-	{
-		MovementUpdatedComp = PrimComps[0];
-	}
-
-	if (ProjMove)
-	{
-		if (MovementUpdatedComp)
-		{
-			ProjMove->SetUpdatedComponent(MovementUpdatedComp);
-		}
+		ProjMove->SetUpdatedComponent(NewProj->ProjectileMesh ? NewProj->ProjectileMesh : Cast<UPrimitiveComponent>(NewProj->GetRootComponent()));
 		ProjMove->Velocity = Forward * LaunchSpeed;
 		ProjMove->Activate(true);
-		UE_LOG(LogTemp, Log, TEXT("ACannon::Shoot - set ProjectileMovement velocity %s"), *ProjMove->Velocity.ToString());
 	}
 	else
 	{
-		// Robust physics fallback: ensure physics is active, recreate state, enable CCD, then apply impulse
-		UPrimitiveComponent* VelocityTarget = MovementUpdatedComp;
+		UPrimitiveComponent* VelocityTarget = NewProj->ProjectileMesh ? NewProj->ProjectileMesh : Cast<UPrimitiveComponent>(PrimComps.Num() ? PrimComps[0] : nullptr);
 		if (VelocityTarget)
 		{
-			// Make sure it's simulating physics
-			if (!VelocityTarget->IsSimulatingPhysics())
-			{
-				VelocityTarget->SetSimulatePhysics(true);
-			}
-
-			// Ensure CCD is on for fast bodies
-			if (FBodyInstance* BI = VelocityTarget->GetBodyInstance())
-			{
-				BI->bUseCCD = true;
-			}
-
-			// Recreate/wake so the body is ready
+			VelocityTarget->SetSimulatePhysics(true);
+			VelocityTarget->SetEnableGravity(true);
 			VelocityTarget->RecreatePhysicsState();
-			VelocityTarget->WakeRigidBody();
-
-			// Log mass and sim state for debugging
-			float Mass = VelocityTarget->GetMass();
-			UE_LOG(LogTemp, Log, TEXT("ACannon::Shoot - Physics fallback target=%s sim=%d mass=%f"),
-				*GetNameSafe(VelocityTarget), (int)VelocityTarget->IsSimulatingPhysics(), Mass);
-
-			// Use an impulse (mass-scaled) so the body responds immediately even if it was asleep or just created
-			const FVector Impulse = Forward * LaunchSpeed * Mass;
-			VelocityTarget->AddImpulse(Impulse, NAME_None, true);
-			VelocityTarget->WakeRigidBody();
-
-			// Small safety: also set linear velocity to desired value (non-authoritative, but useful)
 			VelocityTarget->SetPhysicsLinearVelocity(Forward * LaunchSpeed, false);
-
-			UE_LOG(LogTemp, Log, TEXT("ACannon::Shoot - applied physics impulse %s (impulse vector %s)"), *GetNameSafe(VelocityTarget), *Impulse.ToString());
-		}
-		else
-		{
-			UE_LOG(LogTemp, Warning, TEXT("ACannon::Shoot - no primitive component found to apply physics velocity"));
+			VelocityTarget->WakeRigidBody();
 		}
 	}
 

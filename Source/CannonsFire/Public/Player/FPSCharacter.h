@@ -11,6 +11,7 @@
 class UInputMappingContext;
 class UInputAction;
 class AProjectile;
+class ACannon;
 class USpringArmComponent;
 class UPrimitiveComponent; // forward declare
 
@@ -91,8 +92,19 @@ public:
 	UFUNCTION()
 	void Interact();
 
+	// New: move cannon under crosshair when pressing E
+	UFUNCTION()
+	void MoveCannonUnderCrosshair();
+
+	// New: fire cannon under crosshair when pressing Q
+	UFUNCTION()
+	void FireCannonUnderCrosshair();
+
 private:
 	AProjectile* HeldProjectile;
+
+	// The cannon currently held by the player (if any)
+	ACannon* HeldCannon = nullptr;
 
 	// Track the actual component we grabbed so drop restores physics correctly
 	UPrimitiveComponent* HeldComponent = nullptr;

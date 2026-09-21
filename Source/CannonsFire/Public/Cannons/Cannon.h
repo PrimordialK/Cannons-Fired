@@ -10,6 +10,7 @@
 class USceneComponent;
 class UArrowComponent;
 class AProjectile;
+class USoundBase;
 
 UCLASS()
 class CANNONSFIRE_API ACannon : public AActor
@@ -46,5 +47,9 @@ public:
 	// Spawn & launch a projectile from the muzzle
 	UFUNCTION(BlueprintCallable, Category = "Shooting")
 	void Shoot();
+
+	// One-shot fire sound to play when shooting. Assign a SoundWave or SoundCue in the editor.
+	UPROPERTY(EditAnywhere, Category = "Audio")
+	USoundBase* FireSound = nullptr;
 };
 
